@@ -1,12 +1,11 @@
 import express from "express";
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import { requestId } from "./middleware/requestId.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rateLimit.js";
 import { concurrencyGuard } from "./middleware/concurrency.js";
 import { quotaGuard } from "./middleware/quota.js";
 import { proxyTo } from "./proxy.js";
-import "./types.d.js";
 
 const PORT = process.env.PORT || "8080";
 const CUSTOMER_ACCESS_URL = process.env.CUSTOMER_ACCESS_URL!;

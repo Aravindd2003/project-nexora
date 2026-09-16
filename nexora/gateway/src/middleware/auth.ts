@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import fetch from "node-fetch";
-import type Redis from "ioredis";
+import type { Redis } from "ioredis";
 import { sendProblem } from "../problem.js";
 
 const CUSTOMER_ACCESS_URL = process.env.CUSTOMER_ACCESS_URL!;
