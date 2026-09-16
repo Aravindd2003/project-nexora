@@ -1,0 +1,117 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  customer-access:
+    build: ./services/customer-access
+    env_file: .env
+    environment:
+      PORT: ${CUSTOMER_ACCESS_PORT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${CUSTOMER_ACCESS_PORT}:${CUSTOMER_ACCESS_PORT}"
+
+  operations:
+    build: ./services/operations
+    env_file: .env
+    environment:
+      PORT: ${OPERATIONS_PORT}
+      USAGE_WEBHOOKS_URL: http://usage-webhooks:${USAGE_WEBHOOKS_PORT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      usage-webhooks:
+        condition: service_started
+    ports:
+      - "${OPERATIONS_PORT}:${OPERATIONS_PORT}"
+
+  usage-webhooks:
+    build: ./services/usage-webhooks
+    env_file: .env
+    environment:
+      PORT: ${USAGE_WEBHOOKS_PORT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${USAGE_WEBHOOKS_PORT}:${USAGE_WEBHOOKS_PORT}"
+
+  gateway:
+    build: ./gateway
+    env_file: .env
+    environment:
+      PORT: ${GATEWAY_PORT}
+      CUSTOMER_ACCESS_URL: http://customer-access:${CUSTOMER_ACCESS_PORT}
+      OPERATIONS_URL: http://operations:${OPERATIONS_PORT}
+      USAGE_WEBHOOKS_URL: http://usage-webhooks:${USAGE_WEBHOOKS_PORT}
+    depends_on:
+      - customer-access
+      - operations
+      - usage-webhooks
+      - redis
+    ports:
+      - "${GATEWAY_PORT}:${GATEWAY_PORT}"
+
+  worker:
+    build: ./worker
+    env_file: .env
+    environment:
+      OPERATIONS_URL: http://operations:${OPERATIONS_PORT}
+    depends_on:
+      - redis
+      - operations
+    deploy:
+      replicas: 1
+
+  customer-dashboard:
+    build: ./dashboard-customer
+    env_file: .env
+    environment:
+      PORT: ${CUSTOMER_DASHBOARD_PORT}
+      NEXT_PUBLIC_API_BASE: http://localhost:${GATEWAY_PORT}
+    depends_on:
+      - gateway
+    ports:
+      - "${CUSTOMER_DASHBOARD_PORT}:${CUSTOMER_DASHBOARD_PORT}"
+
+  dummy-customer:
+    build: ./dummy-customer
+    env_file: .env
+    environment:
+      PORT: ${DUMMY_CUSTOMER_PORT}
+      NEXORA_GATEWAY_URL: http://gateway:${GATEWAY_PORT}
+    depends_on:
+      - gateway
+    ports:
+      - "${DUMMY_CUSTOMER_PORT}:${DUMMY_CUSTOMER_PORT}"
+
+volumes:
+  pgdata:
