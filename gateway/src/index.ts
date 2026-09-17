@@ -18,6 +18,23 @@ const redis = new Redis(REDIS_URL);
 const app = express();
 app.use(express.json());
 app.use(requestId);
+// CORS: the Customer Dashboard runs as a browser app on a different origin
+// (localhost:3000) than the Gateway (localhost:8080), and browsers block
+// cross-origin fetches without explicit permission via these headers —
+// including a preflight OPTIONS request before the real one. Allowing "*"
+// is fine here since every actual endpoint still requires a valid API key;
+// CORS only controls which web pages are allowed to *attempt* the request,
+// it is not a substitute for authentication.
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, X-API-Key");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 
 // --- Ingress pipeline: Auth & Tenant Context -> Rate Limiting -> (per-route) -> Dispatch ---
 const auth = authMiddleware(redis);

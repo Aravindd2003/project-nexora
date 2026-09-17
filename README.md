@@ -133,6 +133,10 @@ status = 'RUNNING'` guards) as well as in application logic.
 - ✅ PostgreSQL schema with tenant-scoped queries throughout
 - ✅ Single `docker-compose up` startup
 - ✅ Dummy customer simulator covering all required demo scenarios
+- ✅ Automated tests covering tenant isolation, idempotency, terminal-state
+  immutability, retry backoff, and credential/webhook signing — see
+  [docs/testing.md](docs/testing.md) for how to run them and what each one
+  proves
 
 ## Partially implemented (Tier 2)
 

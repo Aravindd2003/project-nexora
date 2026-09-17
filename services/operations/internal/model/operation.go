@@ -21,6 +21,7 @@ const (
 // terminalStatuses cannot be transitioned out of (Terminal Immutability).
 var terminalStatuses = map[string]bool{
 	StatusSucceeded:    true,
+	StatusFailed:       true,
 	StatusDeadLettered: true,
 	StatusCancelled:    true,
 }
