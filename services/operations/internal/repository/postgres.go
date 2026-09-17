@@ -195,9 +195,9 @@ func (r *Repository) CompleteAttemptSuccess(ctx context.Context, operationID, at
 	}
 
 	_, err = tx.Exec(ctx, `
-		UPDATE operations SET status = $1, output = $2, completed_at = now()
-		WHERE id = $3 AND status = $4`, // guard: only from RUNNING (terminal immutability)
-		model.StatusSucceeded, output, operationID, model.StatusRunning)
+	UPDATE operations SET status = $1, output = $2, completed_at = now(), error_message = NULL
+	WHERE id = $3 AND status = $4`, // guard: only from RUNNING (terminal immutability)
+	model.StatusSucceeded, output, operationID, model.StatusRunning)
 	if err != nil {
 		return err
 	}
