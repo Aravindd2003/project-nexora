@@ -115,11 +115,11 @@ func (r *Repository) ActiveWebhooksForTenant(ctx context.Context, tenantID strin
 	return out, rows.Err()
 }
 
-func (r *Repository) CreateDelivery(ctx context.Context, webhookID, operationID, eventType string) (string, error) {
+func (r *Repository) CreateDelivery(ctx context.Context, webhookID, operationID, eventType string, payload []byte) (string, error) {
 	row := r.pool.QueryRow(ctx, `
-		INSERT INTO webhook_deliveries (webhook_id, operation_id, event_type, next_attempt_at)
-		VALUES ($1, $2, $3, now())
-		RETURNING id`, webhookID, operationID, eventType)
+		INSERT INTO webhook_deliveries (webhook_id, operation_id, event_type, payload, next_attempt_at)
+		VALUES ($1, $2, $3, $4, now())
+		RETURNING id`, webhookID, operationID, eventType, payload)
 	var id string
 	return id, row.Scan(&id)
 }
@@ -148,7 +148,8 @@ func (r *Repository) MarkDeliveryPermanentlyFailed(ctx context.Context, delivery
 	return err
 }
 
-// DuePendingDeliveries powers the retry worker loop.
+// DuePendingDeliveries powers the retry worker loop's status view (unused
+// directly by RetryDue below, kept for potential admin inspection).
 func (r *Repository) DuePendingDeliveries(ctx context.Context, limit int) ([]model.WebhookDelivery, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, webhook_id, operation_id, event_type, status, attempt_count, last_attempt_at, created_at
@@ -164,6 +165,43 @@ func (r *Repository) DuePendingDeliveries(ctx context.Context, limit int) ([]mod
 	for rows.Next() {
 		var d model.WebhookDelivery
 		if err := rows.Scan(&d.ID, &d.WebhookID, &d.OperationID, &d.EventType, &d.Status, &d.AttemptCount, &d.LastAttemptAt, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// DueDelivery is the shape the retry sweep actually needs: enough to
+// re-send the exact original payload against the endpoint's current
+// URL/secret, without the caller needing a second lookup.
+type DueDelivery struct {
+	ID           string
+	URL          string
+	Secret       string
+	Payload      []byte
+	AttemptCount int
+}
+
+// DueDeliveriesWithEndpoint joins pending, due deliveries with their
+// webhook endpoint in one query, since the retry sweep needs both the
+// stored payload and where/how to send it.
+func (r *Repository) DueDeliveriesWithEndpoint(ctx context.Context, limit int) ([]DueDelivery, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT d.id, e.url, e.secret, d.payload, d.attempt_count
+		FROM webhook_deliveries d
+		JOIN webhook_endpoints e ON e.id = d.webhook_id
+		WHERE d.status = 'PENDING' AND d.next_attempt_at <= now()
+		ORDER BY d.next_attempt_at ASC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []DueDelivery
+	for rows.Next() {
+		var d DueDelivery
+		if err := rows.Scan(&d.ID, &d.URL, &d.Secret, &d.Payload, &d.AttemptCount); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

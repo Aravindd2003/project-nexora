@@ -38,7 +38,10 @@ type eventPayload struct {
 // Dispatch attempts delivery to every active webhook endpoint for the
 // tenant. Failures are recorded with an exponential-backoff next_attempt_at
 // rather than retried inline, so a slow/dead customer endpoint never blocks
-// the caller (Service 2 reporting an operation outcome).
+// the caller (Service 2 reporting an operation outcome). The exact signed
+// body is persisted alongside the delivery record so a later retry (see
+// RetryDue) resends byte-for-byte identical content rather than
+// reconstructing — and potentially subtly changing — the payload.
 func (d *Dispatcher) Dispatch(ctx context.Context, tenantID, operationID, eventType string, data json.RawMessage) error {
 	endpoints, err := d.repo.ActiveWebhooksForTenant(ctx, tenantID)
 	if err != nil {
@@ -46,41 +49,42 @@ func (d *Dispatcher) Dispatch(ctx context.Context, tenantID, operationID, eventT
 	}
 
 	for _, ep := range endpoints {
-		deliveryID, err := d.repo.CreateDelivery(ctx, ep.ID, operationID, eventType)
-		if err != nil {
-			continue // don't let one bad insert block other endpoints
-		}
-		d.attemptDelivery(ctx, deliveryID, ep.URL, ep.Secret, eventPayload{
+		body, err := json.Marshal(eventPayload{
 			EventType:   eventType,
 			OperationID: operationID,
 			TenantID:    tenantID,
 			Timestamp:   time.Now().UTC(),
 			Data:        data,
-		}, 1)
+		})
+		if err != nil {
+			continue
+		}
+
+		deliveryID, err := d.repo.CreateDelivery(ctx, ep.ID, operationID, eventType, body)
+		if err != nil {
+			continue // don't let one bad insert block other endpoints
+		}
+		d.attemptDelivery(ctx, deliveryID, ep.URL, ep.Secret, body, 1)
 	}
 	return nil
 }
 
 // RetryDue is called by a background loop in Service 3 to sweep pending
-// deliveries whose backoff window has elapsed.
+// deliveries whose backoff window has elapsed, and actually resends each
+// one against its endpoint's current URL/secret using the exact payload
+// bytes stored at creation time.
 func (d *Dispatcher) RetryDue(ctx context.Context) (int, error) {
-	due, err := d.repo.DuePendingDeliveries(ctx, 50)
+	due, err := d.repo.DueDeliveriesWithEndpoint(ctx, 50)
 	if err != nil {
 		return 0, err
 	}
-	// Note: a fuller implementation would re-fetch the endpoint URL/secret
-	// and reconstruct the payload per delivery; omitted here for brevity —
-	// see docs/architecture.md for the intended extension point.
+	for _, item := range due {
+		d.attemptDelivery(ctx, item.ID, item.URL, item.Secret, item.Payload, item.AttemptCount+1)
+	}
 	return len(due), nil
 }
 
-func (d *Dispatcher) attemptDelivery(ctx context.Context, deliveryID, url, secret string, payload eventPayload, attempt int) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		_ = d.repo.MarkDeliveryPermanentlyFailed(ctx, deliveryID)
-		return
-	}
-
+func (d *Dispatcher) attemptDelivery(ctx context.Context, deliveryID, url, secret string, body []byte, attempt int) {
 	signature := sign(secret, body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {

@@ -86,8 +86,9 @@ CREATE TABLE webhook_deliveries (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     webhook_id      UUID NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
     operation_id    UUID NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
-    event_type      TEXT NOT NULL,             -- operation.succeeded | operation.failed | operation.dead_lettered
-    status          TEXT NOT NULL DEFAULT 'PENDING', -- PENDING | DELIVERED | FAILED
+    event_type      TEXT NOT NULL,
+    payload         JSONB NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'PENDING',
     attempt_count   INT NOT NULL DEFAULT 0,
     last_attempt_at TIMESTAMPTZ,
     next_attempt_at TIMESTAMPTZ,
