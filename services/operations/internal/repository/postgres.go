@@ -143,6 +143,75 @@ func (r *Repository) ListOperations(ctx context.Context, f ListFilter) ([]model.
 	return out, rows.Err()
 }
 
+// AdminListFilter is deliberately a separate type from ListFilter (which
+// requires a TenantID) — this makes the cross-tenant nature of the admin
+// query visible at the call site rather than something achieved by passing
+// an empty tenant ID into the customer-facing path.
+type AdminListFilter struct {
+	Status string
+	Limit  int
+	Offset int
+}
+
+// ListOperationsAnyTenant powers the Admin Dashboard's failed/dead-lettered
+// operations view. It intentionally has no tenant_id in its WHERE clause —
+// this is the one place in the codebase that is allowed to see across
+// tenants, and it is never reachable from the customer-facing API surface.
+func (r *Repository) ListOperationsAnyTenant(ctx context.Context, f AdminListFilter) ([]model.Operation, error) {
+	query := `
+		SELECT id, tenant_id, idempotency_key, op_type, status, input, output, error_message,
+		       attempt_count, max_retries, created_at, started_at, completed_at
+		FROM operations`
+	var args []any
+
+	if f.Status != "" {
+		args = append(args, f.Status)
+		query += fmt.Sprintf(" WHERE status = $%d", len(args))
+	}
+	query += " ORDER BY created_at DESC"
+	args = append(args, f.Limit)
+	query += fmt.Sprintf(" LIMIT $%d", len(args))
+	args = append(args, f.Offset)
+	query += fmt.Sprintf(" OFFSET $%d", len(args))
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.Operation
+	for rows.Next() {
+		op, err := scanOperationRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *op)
+	}
+	return out, rows.Err()
+}
+
+// PlatformSummary gives the Admin Dashboard's headline numbers: how many
+// operations sit in each status right now, across every tenant.
+func (r *Repository) PlatformSummary(ctx context.Context) (map[string]int, error) {
+	rows, err := r.pool.Query(ctx, `SELECT status, COUNT(*) FROM operations GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		counts[status] = count
+	}
+	return counts, rows.Err()
+}
+
 // TransitionToQueued moves PENDING -> QUEUED. Called right after a
 // successful enqueue so DB state and queue state never disagree about
 // whether a job was actually submitted.
@@ -195,9 +264,9 @@ func (r *Repository) CompleteAttemptSuccess(ctx context.Context, operationID, at
 	}
 
 	_, err = tx.Exec(ctx, `
-	UPDATE operations SET status = $1, output = $2, completed_at = now(), error_message = NULL
-	WHERE id = $3 AND status = $4`, // guard: only from RUNNING (terminal immutability)
-	model.StatusSucceeded, output, operationID, model.StatusRunning)
+		UPDATE operations SET status = $1, output = $2, completed_at = now(), error_message = NULL
+		WHERE id = $3 AND status = $4`, // guard: only from RUNNING (terminal immutability)
+		model.StatusSucceeded, output, operationID, model.StatusRunning)
 	if err != nil {
 		return err
 	}

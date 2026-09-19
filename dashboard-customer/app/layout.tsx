@@ -1,5 +1,5 @@
 import "./globals.css";
-import Sidebar from "./components/Sidebar";
+import AppShell from "./components/AppShell";
 
 export const metadata = { title: "Nexora — Customer Dashboard" };
 
@@ -7,10 +7,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <div className="shell">
-          <Sidebar />
-          <main className="main">{children}</main>
-        </div>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

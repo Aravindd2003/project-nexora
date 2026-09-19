@@ -18,6 +18,7 @@ const redis = new Redis(REDIS_URL);
 const app = express();
 app.use(express.json());
 app.use(requestId);
+
 // CORS: the Customer Dashboard runs as a browser app on a different origin
 // (localhost:3000) than the Gateway (localhost:8080), and browsers block
 // cross-origin fetches without explicit permission via these headers —
@@ -91,6 +92,25 @@ app.delete("/v1/api-keys/:id", auth, rateLimit, async (req, res) => {
 // scope focused on customer-facing tenant isolation, which is what's graded.
 app.get("/admin/operations/:id", async (req, res) => {
   const upstream = await fetch(`${OPERATIONS_URL}/internal/operations/${req.params.id}`, {
+    headers: { "X-Request-ID": req.requestId },
+  });
+  res.status(upstream.status).send(await upstream.text());
+});
+app.get("/admin/operations/:id/attempts", async (req, res) => {
+  const upstream = await fetch(`${OPERATIONS_URL}/internal/operations/${req.params.id}/attempts`, {
+    headers: { "X-Request-ID": req.requestId },
+  });
+  res.status(upstream.status).send(await upstream.text());
+});
+app.get("/admin/operations", async (req, res) => {
+  const qs = new URLSearchParams(req.query as Record<string, string>).toString();
+  const upstream = await fetch(`${OPERATIONS_URL}/internal/operations${qs ? "?" + qs : ""}`, {
+    headers: { "X-Request-ID": req.requestId },
+  });
+  res.status(upstream.status).send(await upstream.text());
+});
+app.get("/admin/summary", async (req, res) => {
+  const upstream = await fetch(`${OPERATIONS_URL}/internal/summary`, {
     headers: { "X-Request-ID": req.requestId },
   });
   res.status(upstream.status).send(await upstream.text());

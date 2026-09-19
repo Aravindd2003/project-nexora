@@ -98,3 +98,31 @@ func jitterFraction() float64 {
 	// retries, it isn't security-sensitive.
 	return float64(time.Now().UnixNano()%1000) / 1000.0
 }
+
+// concurrencyKeyPrefix matches the key the Gateway's concurrencyGuard reads
+// (see gateway/src/middleware/concurrency.ts). Service 2 owns writing this
+// counter because it is the only thing that knows, authoritatively, when an
+// operation actually enters or leaves the RUNNING state — the Gateway only
+// enforces the limit, it doesn't track occupancy itself.
+const concurrencyKeyPrefix = "nexora:concurrency:"
+
+// IncrConcurrency marks one more operation as actively RUNNING for a tenant.
+// Called when a worker starts an attempt.
+func (q *Queue) IncrConcurrency(ctx context.Context, tenantID string) error {
+	return q.rdb.Incr(ctx, concurrencyKeyPrefix+tenantID).Err()
+}
+
+// DecrConcurrency marks one fewer operation as RUNNING. Called whenever an
+// attempt finishes, regardless of outcome (success, permanent failure, or
+// scheduled for retry) — while an operation is RETRYING/QUEUED waiting on
+// backoff, it is not occupying a concurrency slot.
+func (q *Queue) DecrConcurrency(ctx context.Context, tenantID string) error {
+	val, err := q.rdb.Decr(ctx, concurrencyKeyPrefix+tenantID).Result()
+	if err == nil && val < 0 {
+		// Guard against a stray double-decrement (e.g. a duplicate worker
+		// report) driving the counter negative, which would otherwise let
+		// the Gateway's check (`current >= max`) misbehave.
+		_ = q.rdb.Set(ctx, concurrencyKeyPrefix+tenantID, 0, 0).Err()
+	}
+	return err
+}

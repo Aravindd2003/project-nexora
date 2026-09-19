@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -42,6 +43,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Post("/internal/operations/{id}/attempts/complete", h.completeAttempt)
 	r.Get("/internal/operations/{id}", h.adminGetOperation)
 	r.Get("/internal/operations/{id}/attempts", h.listAttempts)
+	r.Get("/internal/operations", h.adminListOperations)
+	r.Get("/internal/summary", h.adminSummary)
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	return r
@@ -162,6 +165,18 @@ func (h *Handler) startAttempt(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to start attempt", reqID(r))
 		return
 	}
+
+	// Mark this tenant as occupying one more concurrency slot. Best-effort:
+	// a Redis hiccup here must not fail the attempt itself, since the
+	// concurrency limit is an admission-time throttle, not a correctness
+	// guarantee — worst case, one over-limit operation slips through
+	// briefly, which is a far smaller problem than losing the operation.
+	if op, opErr := h.repo.GetOperationAnyTenant(r.Context(), opID); opErr == nil {
+		if err := h.q.IncrConcurrency(r.Context(), op.TenantID); err != nil {
+			log.Printf("operations: failed to increment concurrency counter for tenant %s: %v", op.TenantID, err)
+		}
+	}
+
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"attempt_id": attemptID})
 }
 
@@ -191,6 +206,13 @@ func (h *Handler) completeAttempt(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "operation not found", reqID(r))
 		return
+	}
+
+	// This attempt is finishing (success, permanent failure, or about to be
+	// rescheduled for retry) — either way it is no longer occupying a
+	// concurrency slot right now.
+	if err := h.q.DecrConcurrency(r.Context(), op.TenantID); err != nil {
+		log.Printf("operations: failed to decrement concurrency counter for tenant %s: %v", op.TenantID, err)
 	}
 
 	if req.Success {
@@ -248,4 +270,32 @@ func (h *Handler) listAttempts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"attempts": attempts})
+}
+
+func (h *Handler) adminListOperations(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+	ops, err := h.repo.ListOperationsAnyTenant(r.Context(), repository.AdminListFilter{
+		Status: r.URL.Query().Get("status"),
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to list operations", reqID(r))
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"operations": ops})
+}
+
+func (h *Handler) adminSummary(w http.ResponseWriter, r *http.Request) {
+	counts, err := h.repo.PlatformSummary(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to load summary", reqID(r))
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"status_counts": counts})
 }

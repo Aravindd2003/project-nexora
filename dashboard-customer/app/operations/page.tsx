@@ -37,6 +37,15 @@ export default function OperationsPage() {
 
   useEffect(load, [status]);
 
+  // Poll the list every 5s so status changes (QUEUED -> RUNNING -> SUCCEEDED)
+  // are visible without a manual refresh — the same pattern already used on
+  // the operation detail page, applied here to close the gap where only the
+  // detail page auto-updated.
+  useEffect(() => {
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, [status]);
+
   const filtered = search
     ? ops.filter((o) => o.id.includes(search) || o.op_type.includes(search))
     : ops;
